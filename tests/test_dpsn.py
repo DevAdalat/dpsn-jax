@@ -61,17 +61,21 @@ def test_dpsn_training_step():
     # Training step
     def train_step(state, batch, rng):
         def loss_fn(params):
-            logits, aux_loss = state.apply_fn(
+            # Model returns: logits, (aux_loss, active_count)
+            logits, (aux_loss, active_count) = state.apply_fn(
                 {"params": params}, batch["input"], training=True, rngs={"noise": rng}
             )
             loss = optax.softmax_cross_entropy_with_integer_labels(
                 logits=logits, labels=batch["target"]
             ).mean()
             total_loss = loss + 0.01 * aux_loss
-            return total_loss, logits
+            # Since jax.value_and_grad can only handle scalar aux returns easily if unchecked,
+            # or requires has_aux=True which returns the second element of the tuple.
+            # We return (loss, (metrics))
+            return total_loss, (logits, aux_loss, active_count)
 
         grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-        (loss, logits), grads = grad_fn(state.params)
+        (loss, (logits, aux_loss, active_count)), grads = grad_fn(state.params)
         state = state.apply_gradients(grads=grads)
         return state, loss, logits
 

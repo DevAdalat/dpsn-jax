@@ -106,20 +106,17 @@ class Router(nn.Module):
         weights = weights * mask
 
         # Calculate f_i (fraction of selection)
-        # top_k_indices: (batch, seq, max_k)
-        # We need to one-hot encode these indices and sum them up
-        selected_one_hot = nn.one_hot(
-            top_k_indices, self.num_memory_slots
-        )  # (batch, seq, max_k, slots)
-        # Apply mask to one-hot to only count actually used slots (within budget)
-        mask_expanded = mask[..., None]  # (batch, seq, max_k, 1)
-        selected_one_hot = selected_one_hot * mask_expanded
+        # We use scatter_add to avoid OOM from materializing large one_hot tensor
+        flat_indices = top_k_indices.reshape(-1)
+        flat_mask = mask.reshape(-1).astype(jnp.float32)
 
-        # Sum over k, mean over batch/seq
-        selection_counts = jnp.sum(selected_one_hot, axis=-2)  # (batch, seq, slots)
-        avg_selection = jnp.mean(
-            selection_counts.reshape(-1, self.num_memory_slots), axis=0
-        )
+        counts = jnp.zeros((self.num_memory_slots,), dtype=jnp.float32)
+        counts = counts.at[flat_indices].add(flat_mask)
+
+        # Normalize: sum(mask for slot i) / (batch * seq)
+        # total_steps (batch * seq) is total elements / max_k
+        total_steps = top_k_indices.size / self.max_k
+        avg_selection = counts / total_steps
 
         # Load Balancing Loss: num_slots * sum(avg_probs * avg_selection)
         # We use a coefficient (alpha) in the main training loop, here we just return the raw term.
