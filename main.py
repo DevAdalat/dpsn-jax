@@ -59,7 +59,7 @@ def main():
     @jax.jit
     def train_step(state, batch, rng):
         def loss_fn(params):
-            logits, aux_loss = state.apply_fn(
+            logits, (aux_loss, active_count) = state.apply_fn(
                 {"params": params}, batch["input"], training=True, rngs={"noise": rng}
             )
             loss = optax.softmax_cross_entropy_with_integer_labels(
@@ -68,11 +68,17 @@ def main():
 
             # Add auxiliary loss with coefficient 0.01
             total_loss = loss + 0.01 * aux_loss
-            return total_loss
+            metrics = {
+                "loss": total_loss,
+                "aux_loss": aux_loss,
+                "active_count": active_count,
+            }
+            return total_loss, metrics
 
-        loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
+        (loss, metrics), grads = grad_fn(state.params)
         state = state.apply_gradients(grads=grads)
-        return state, loss
+        return state, metrics
 
     print(f"Starting training for {args.steps} steps...")
     rng, step_rng = jax.random.split(rng)
@@ -85,10 +91,12 @@ def main():
             batch = next(iterator)
 
         rng, step_rng = jax.random.split(rng)
-        state, loss = train_step(state, batch, step_rng)
+        state, metrics = train_step(state, batch, step_rng)
+        loss = metrics["loss"]
+        active = metrics["active_count"]
 
         if i % 1 == 0:
-            print(f"Step {i + 1}: Loss = {loss:.4f}")
+            print(f"Step {i + 1}: Loss = {loss:.4f}, Active Params = {active:.0f}")
 
     print("Training complete.")
 

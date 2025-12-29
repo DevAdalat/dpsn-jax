@@ -9,6 +9,7 @@ class DPSNLayer(nn.Module):
     num_memory_slots: int
     min_k: int
     max_k: int
+    router_dim: int = 0  # Add router_dim with default 0
 
     def setup(self):
         self.param_pool = self.param(
@@ -18,7 +19,10 @@ class DPSNLayer(nn.Module):
         )
 
         self.router = Router(
-            num_memory_slots=self.num_memory_slots, min_k=self.min_k, max_k=self.max_k
+            num_memory_slots=self.num_memory_slots,
+            min_k=self.min_k,
+            max_k=self.max_k,
+            router_dim=self.router_dim,  # Pass it to Router
         )
 
     def __call__(self, x: jnp.ndarray, training: bool = False):
@@ -27,7 +31,16 @@ class DPSNLayer(nn.Module):
         proj = jnp.einsum("...d,...kd->...k", x, selected_params)
         weighted_proj = proj * weights
         output = jnp.einsum("...k,...kd->...d", weighted_proj, selected_params)
-        return output, aux_loss
+
+        # Count unique parameters updated (selected) in this batch
+        # indices shape: (batch, seq, max_k)
+        flat_indices = indices.reshape(-1)
+        # Use a boolean mask to count unique slots
+        touched_mask = jnp.zeros((self.num_memory_slots,), dtype=jnp.bool_)
+        touched_mask = touched_mask.at[flat_indices].set(True)
+        active_count = jnp.sum(touched_mask)
+
+        return output, (aux_loss, active_count)
 
 
 class DPSNBlock(nn.Module):
@@ -35,6 +48,7 @@ class DPSNBlock(nn.Module):
     num_memory_slots: int
     min_k: int
     max_k: int
+    router_dim: int = 0  # Add router_dim to block
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, training: bool = False):
@@ -48,11 +62,12 @@ class DPSNBlock(nn.Module):
         x = x + attn_out
 
         norm_x = nn.LayerNorm()(x)
-        dpsn_out, aux_loss = DPSNLayer(
+        dpsn_out, metrics = DPSNLayer(
             d_model=self.d_model,
             num_memory_slots=self.num_memory_slots,
             min_k=self.min_k,
             max_k=self.max_k,
+            router_dim=self.router_dim,  # Pass it down
         )(norm_x, training=training)
 
-        return x + dpsn_out, aux_loss
+        return x + dpsn_out, metrics

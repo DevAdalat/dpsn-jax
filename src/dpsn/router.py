@@ -8,6 +8,7 @@ class Router(nn.Module):
     num_memory_slots: int
     min_k: int
     max_k: int
+    router_dim: int = 0  # Default to 0, which means auto-calculate
 
     @nn.compact
     def __call__(
@@ -46,8 +47,13 @@ class Router(nn.Module):
         # To avoid O(M) in a real large scale system, we'd need hierarchical routing.
         # For this implementation (M=20k), O(M) is fine.
         # Use a bottleneck dimension for the router hidden layer to keep it lightweight.
-        router_dim = max(32, x.shape[-1] // 8)
-        hidden = nn.Dense(features=router_dim, name="router_hidden")(x)
+
+        # Determine router dimension
+        r_dim = self.router_dim
+        if r_dim <= 0:
+            r_dim = max(32, x.shape[-1] // 8)
+
+        hidden = nn.Dense(features=r_dim, name="router_hidden")(x)
         hidden = nn.relu(hidden)
         scores = nn.Dense(features=self.num_memory_slots, name="router_scores")(hidden)
 

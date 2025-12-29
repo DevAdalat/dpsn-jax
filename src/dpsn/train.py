@@ -108,7 +108,7 @@ def train(config: Config):
     @jax.jit
     def train_step(state, batch, rng):
         def loss_fn(params):
-            logits, aux_loss = state.apply_fn(
+            logits, (aux_loss, active_count) = state.apply_fn(
                 {"params": params}, batch["input"], training=True, rngs={"noise": rng}
             )
             loss = optax.softmax_cross_entropy_with_integer_labels(
@@ -118,11 +118,17 @@ def train(config: Config):
             # Add auxiliary loss with coefficient 0.01
             # This encourages the router to use more parameter slots (prevent collapse)
             total_loss = loss + 0.01 * aux_loss
-            return total_loss
+            metrics = {
+                "loss": total_loss,
+                "aux_loss": aux_loss,
+                "active_count": active_count,
+            }
+            return total_loss, metrics
 
-        loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
+        (loss, metrics), grads = grad_fn(state.params)
         state = state.apply_gradients(grads=grads)
-        return state, loss
+        return state, metrics
 
     print(f"Starting training for {config.training.steps} steps...")
 
@@ -140,10 +146,12 @@ def train(config: Config):
 
         rng, step_rng = jax.random.split(rng)
 
-        state, loss = train_step(state, batch_jax, step_rng)
+        state, metrics = train_step(state, batch_jax, step_rng)
+        loss = metrics["loss"]
+        active = metrics["active_count"]
 
         if step % config.training.log_every_steps == 0:
-            print(f"Step {step}: Loss = {loss:.4f}")
+            print(f"Step {step}: Loss = {loss:.4f}, Active Params = {active:.0f}")
 
         if step % config.training.save_every_steps == 0:
             save_checkpoint(state, config.training.workdir, step)

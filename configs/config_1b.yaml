@@ -1,0 +1,22 @@
+
+model:
+  d_model: 1024               # Increased from 64 to support 1B scale
+  num_layers: 16              # Moderate depth, rely on width/sparsity
+  num_memory_slots: 50000     # REDUCED from 65536 to fit RAM safely
+  min_k: 32                   # Minimum active parameters
+  max_k: 128                  # Maximum active parameters
+  router_dim: 256             # Smarter router
+
+training:
+  batch_size: 4               # Reduced batch size to save memory
+  seq_len: 256                # Reduced seq_len for memory safety
+  learning_rate: 3e-4
+  steps: 1000
+  log_every_steps: 10
+  save_every_steps: 100
+  seed: 42
+  workdir: "checkpoints_1b"
+
+data:
+  path: "data/input.txt"
+  vocab_path: "data/vocab.json"
