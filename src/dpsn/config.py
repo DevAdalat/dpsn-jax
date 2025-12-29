@@ -1,5 +1,5 @@
 import yaml
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
 
@@ -23,15 +23,20 @@ class TrainingConfig:
     save_every_steps: int
     seed: int
     workdir: str
- 
+
     def __post_init__(self):
         self.learning_rate = float(self.learning_rate)
 
 
 @dataclass
 class DataConfig:
-    path: str
-    vocab_path: str
+    path: Optional[str] = None
+    vocab_path: Optional[str] = None
+    huggingface_dataset: Optional[str] = None
+    huggingface_dataset_config: Optional[str] = None
+    dataset_column_name: str = "text"
+    tokenizer_name: Optional[str] = None
+    streaming: bool = True
 
 
 @dataclass

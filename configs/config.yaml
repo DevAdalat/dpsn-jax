@@ -18,3 +18,9 @@ training:
 data:
   path: "data/input.txt"
   vocab_path: "data/vocab.json"
+  # Optional: HuggingFace Dataset
+  # huggingface_dataset: "wikitext"
+  # huggingface_dataset_config: "wikitext-103-v1"
+  # dataset_column_name: "text"
+  # tokenizer_name: "gpt2"
+  # streaming: true

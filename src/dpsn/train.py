@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import optax
 import time
 import os
+import resource
 import pickle
 from flax.training import train_state
 from flax import linen as nn
@@ -40,10 +41,15 @@ def train(config: Config):
     from .data import create_dataset
 
     ds, vocab_size, stoi, itos = create_dataset(
-        config.data.path,
-        config.data.vocab_path,
-        config.training.batch_size,
-        config.training.seq_len,
+        path=config.data.path,
+        vocab_path=config.data.vocab_path,
+        batch_size=config.training.batch_size,
+        seq_len=config.training.seq_len,
+        huggingface_dataset=config.data.huggingface_dataset,
+        huggingface_dataset_config=config.data.huggingface_dataset_config,
+        dataset_column_name=config.data.dataset_column_name,
+        tokenizer_name=config.data.tokenizer_name,
+        streaming=config.data.streaming,
     )
     iterator = iter(ds)
 
@@ -134,11 +140,14 @@ def train(config: Config):
     print(f"Starting training for {config.training.steps} steps...")
 
     for step in range(1, config.training.steps + 1):
+        t0 = time.time()
         try:
             batch = next(iterator)
         except StopIteration:
+            print("Iterator exhausted. Restarting...")
             iterator = iter(ds)
             batch = next(iterator)
+        load_time = time.time() - t0
 
         batch_jax = {
             "input": jnp.array(batch["input"], dtype=jnp.int32),
@@ -147,12 +156,21 @@ def train(config: Config):
 
         rng, step_rng = jax.random.split(rng)
 
+        t1 = time.time()
         state, metrics = train_step(state, batch_jax, step_rng)
+        step_time = time.time() - t1
+
         loss = metrics["loss"]
         active = metrics["active_count"]
 
         if step % config.training.log_every_steps == 0:
-            print(f"Step {step}: Loss = {loss:.4f}, Active Params = {active:.0f}")
+            mem_usage = (
+                resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+            )  # KB to MB
+            print(
+                f"Step {step}: Loss = {loss:.4f}, Active Params = {active:.0f}, "
+                f"Load Time: {load_time:.4f}s, Step Time: {step_time:.4f}s, Memory: {mem_usage:.2f} MB"
+            )
 
         if step % config.training.save_every_steps == 0:
             save_checkpoint(state, config.training.workdir, step)
