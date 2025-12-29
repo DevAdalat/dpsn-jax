@@ -1,0 +1,20 @@
+model:
+  d_model: 64
+  num_layers: 8
+  num_memory_slots: 1024
+  min_k: 4
+  max_k: 16
+
+training:
+  batch_size: 4
+  seq_len: 32
+  learning_rate: 0.001
+  steps: 5000
+  log_every_steps: 1
+  save_every_steps: 1000
+  seed: 42
+  workdir: "checkpoints/dpsn_tiny"
+
+data:
+  path: "data/input.txt"
+  vocab_path: "data/vocab.json"
