@@ -109,7 +109,10 @@ def create_dataset(
         if AutoTokenizer is None or hf_load_dataset is None:
             raise ImportError("Failed to import datasets or transformers")
 
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)  # type: ignore
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_name, trust_remote_code=True
+        )  # type: ignore
+
         vocab_size = tokenizer.vocab_size  # type: ignore
 
         # Load dataset

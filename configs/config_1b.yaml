@@ -17,5 +17,7 @@ training:
   workdir: "checkpoints_1b"
 
 data:
-  path: "data/input.txt"
-  vocab_path: "data/vocab.json"
+  huggingface_dataset: "VisionTheta/fineweb-1B"
+  tokenizer_name: "zai-org/GLM-4.7"
+  streaming: true
+  dataset_column_name: "text"
