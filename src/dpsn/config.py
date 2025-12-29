@@ -23,6 +23,9 @@ class TrainingConfig:
     save_every_steps: int
     seed: int
     workdir: str
+ 
+    def __post_init__(self):
+        self.learning_rate = float(self.learning_rate)
 
 
 @dataclass
