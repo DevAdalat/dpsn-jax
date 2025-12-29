@@ -54,6 +54,7 @@ def train(config: Config):
         num_memory_slots=config.model.num_memory_slots,
         min_k=config.model.min_k,
         max_k=config.model.max_k,
+        router_dim=config.model.router_dim,  # Pass it from config
     )
 
     rng = jax.random.PRNGKey(config.training.seed)

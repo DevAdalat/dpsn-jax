@@ -10,6 +10,7 @@ class ModelConfig:
     num_memory_slots: int
     min_k: int
     max_k: int
+    router_dim: int = 0  # Add router_dim field with default 0
 
 
 @dataclass
