@@ -1,4 +1,3 @@
-
 model:
   d_model: 1024               # Increased from 64 to support 1B scale
   num_layers: 16              # Moderate depth, rely on width/sparsity
@@ -8,8 +7,8 @@ model:
   router_dim: 256             # Smarter router
 
 training:
-  batch_size: 4               # Reduced batch size to save memory
-  seq_len: 256                # Reduced seq_len for memory safety
+  batch_size: 2               # Reduced batch size to save memory (was 4)
+  seq_len: 128                # Reduced seq_len for memory safety (was 256)
   learning_rate: 3.0e-4       # Explicit float
   steps: 1000
   log_every_steps: 10
