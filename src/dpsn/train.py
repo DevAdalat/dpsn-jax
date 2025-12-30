@@ -120,8 +120,7 @@ def train(config: Config):
     del params
     gc.collect()
 
-    @jax.jit(donate_argnums=(0,))
-    def train_step(state, batch, rng):
+    def train_step_impl(state, batch, rng):
         def loss_fn(params):
             logits, (aux_loss, active_count) = state.apply_fn(
                 {"params": params}, batch["input"], training=True, rngs={"noise": rng}
@@ -142,6 +141,8 @@ def train(config: Config):
         (loss, metrics), grads = grad_fn(state.params)
         state = state.apply_gradients(grads=grads)
         return state, metrics
+
+    train_step = jax.jit(train_step_impl, donate_argnums=(0,))
 
     print(f"Starting training for {config.training.steps} steps...")
 
