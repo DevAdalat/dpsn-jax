@@ -29,6 +29,7 @@ class FlashAttention(nn.Module):
         k = nn.Dense(self.d_model, dtype=self.dtype)(x)
         v = nn.Dense(self.d_model, dtype=self.dtype)(x)
 
+        # Initial Reshape: (Batch, SeqLen, Heads, HeadDim)
         q = q.reshape(batch, seq_len, self.num_heads, head_dim)
         k = k.reshape(batch, seq_len, self.num_heads, head_dim)
         v = v.reshape(batch, seq_len, self.num_heads, head_dim)
@@ -43,8 +44,19 @@ class FlashAttention(nn.Module):
         sm_scale = 1.0 / math.sqrt(head_dim)
 
         if use_flash:
+            # Pallas Flash Attention expects (Batch, Heads, SeqLen, HeadDim)
+            # Transpose to match expectation
+            q = jnp.transpose(q, (0, 2, 1, 3))
+            k = jnp.transpose(k, (0, 2, 1, 3))
+            v = jnp.transpose(v, (0, 2, 1, 3))
+
+            # Output is (Batch, Heads, SeqLen, HeadDim)
             attn_output = flash_attention(q, k, v, causal=True, sm_scale=sm_scale)
+
+            # Transpose back to (Batch, SeqLen, Heads, HeadDim)
+            attn_output = jnp.transpose(attn_output, (0, 2, 1, 3))
         else:
+            # CPU Fallback also expects (Batch, Heads, SeqLen, HeadDim)
             q = jnp.transpose(q, (0, 2, 1, 3))
             k = jnp.transpose(k, (0, 2, 1, 3))
             v = jnp.transpose(v, (0, 2, 1, 3))
@@ -58,6 +70,7 @@ class FlashAttention(nn.Module):
             weights = nn.softmax(logits, axis=-1)
             attn_output = jnp.einsum("bhqk,bhkd->bhqd", weights, v)
 
+            # Transpose back to (Batch, SeqLen, Heads, HeadDim)
             attn_output = jnp.transpose(attn_output, (0, 2, 1, 3))
 
         attn_output = attn_output.reshape(batch, seq_len, self.d_model)
