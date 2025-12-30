@@ -1,15 +1,15 @@
 model:
-  d_model: 1024               # Increased from 64 to support 1B scale
-  num_layers: 16              # Moderate depth, rely on width/sparsity
-  num_memory_slots: 50000     # REDUCED from 65536 to fit RAM safely
-  min_k: 32                   # Minimum active parameters
-  max_k: 128                  # Maximum active parameters
-  router_dim: 256             # Smarter router
+  d_model: 1024
+  num_layers: 16
+  num_memory_slots: 32768
+  min_k: 32
+  max_k: 128
+  router_dim: 256
 
 training:
-  batch_size: 2               # Reduced batch size to save memory (was 4)
-  seq_len: 128                # Reduced seq_len for memory safety (was 256)
-  learning_rate: 3.0e-4       # Explicit float
+  batch_size: 2
+  seq_len: 128
+  learning_rate: 3.0e-4
   steps: 1000
   log_every_steps: 10
   save_every_steps: 100

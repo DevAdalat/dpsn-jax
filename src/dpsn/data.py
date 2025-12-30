@@ -121,7 +121,6 @@ def create_dataset(
             huggingface_dataset_config,
             split="train",
             streaming=streaming,
-            trust_remote_code=True,
         )
 
         if streaming:
