@@ -3,16 +3,18 @@ import jax.numpy as jnp
 from flax import linen as nn
 import math
 
-try:
-    from jax.experimental.pallas.ops.tpu.flash_attention import flash_attention
+# Default fallback
+FLASH_ATTENTION_AVAILABLE = False
+flash_attention = None
 
+try:
+    # Attempt import
+    from jax.experimental.pallas.ops.tpu.flash_attention import flash_attention as fa_fn
+
+    flash_attention = fa_fn
     FLASH_ATTENTION_AVAILABLE = True
 except ImportError:
-
-    def flash_attention(*args, **kwargs):
-        raise ImportError("Flash Attention not available")
-
-    FLASH_ATTENTION_AVAILABLE = False
+    pass
 
 
 class FlashAttention(nn.Module):
@@ -29,7 +31,6 @@ class FlashAttention(nn.Module):
         k = nn.Dense(self.d_model, dtype=self.dtype)(x)
         v = nn.Dense(self.d_model, dtype=self.dtype)(x)
 
-        # Initial Reshape: (Batch, SeqLen, Heads, HeadDim)
         q = q.reshape(batch, seq_len, self.num_heads, head_dim)
         k = k.reshape(batch, seq_len, self.num_heads, head_dim)
         v = v.reshape(batch, seq_len, self.num_heads, head_dim)
@@ -41,22 +42,23 @@ class FlashAttention(nn.Module):
         except:
             pass
 
+        # Pallas Flash Attention requires block size constraints.
+        # Default MIN_BLOCK_SIZE is often 128. If seq_len < 128, it fails.
+        # For simplicity and stability, we fallback to standard attention for short sequences.
+        if use_flash and seq_len < 128:
+            use_flash = False
+
         sm_scale = 1.0 / math.sqrt(head_dim)
 
-        if use_flash:
-            # Pallas Flash Attention expects (Batch, Heads, SeqLen, HeadDim)
-            # Transpose to match expectation
+        if use_flash and flash_attention is not None:
             q = jnp.transpose(q, (0, 2, 1, 3))
             k = jnp.transpose(k, (0, 2, 1, 3))
             v = jnp.transpose(v, (0, 2, 1, 3))
 
-            # Output is (Batch, Heads, SeqLen, HeadDim)
             attn_output = flash_attention(q, k, v, causal=True, sm_scale=sm_scale)
 
-            # Transpose back to (Batch, SeqLen, Heads, HeadDim)
             attn_output = jnp.transpose(attn_output, (0, 2, 1, 3))
         else:
-            # CPU Fallback also expects (Batch, Heads, SeqLen, HeadDim)
             q = jnp.transpose(q, (0, 2, 1, 3))
             k = jnp.transpose(k, (0, 2, 1, 3))
             v = jnp.transpose(v, (0, 2, 1, 3))
@@ -70,7 +72,6 @@ class FlashAttention(nn.Module):
             weights = nn.softmax(logits, axis=-1)
             attn_output = jnp.einsum("bhqk,bhkd->bhqd", weights, v)
 
-            # Transpose back to (Batch, SeqLen, Heads, HeadDim)
             attn_output = jnp.transpose(attn_output, (0, 2, 1, 3))
 
         attn_output = attn_output.reshape(batch, seq_len, self.d_model)
