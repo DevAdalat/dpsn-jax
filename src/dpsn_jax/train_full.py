@@ -271,6 +271,8 @@ def main():
         config = DPSNRConfig.mini()
     elif args.model_preset == "small":
         config = DPSNRConfig.small()
+    elif args.model_preset == "small_300m":
+        config = DPSNRConfig.small_300m()
     elif args.model_preset == "medium":
         config = DPSNRConfig.medium()
     elif args.model_preset == "large":

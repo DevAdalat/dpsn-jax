@@ -129,6 +129,22 @@ class DPSNRConfig:
         )
 
     @classmethod
+    def small_300m(cls) -> "DPSNRConfig":
+        """Approx 300M params."""
+        return cls(
+            vocab_size=50257,
+            hidden_dim=512,
+            num_layers=8,
+            num_heads=8,
+            pool_size=200_000,
+            pool_dim=512,
+            max_loops=8,
+            max_seq_len=512,
+            min_k=16,
+            max_k=64,
+        )
+
+    @classmethod
     def small(cls) -> "DPSNRConfig":
         """Approx 400M params."""
         return cls(
