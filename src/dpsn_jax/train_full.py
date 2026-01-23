@@ -106,7 +106,6 @@ def create_data_iterator(args: TrainArgs, tokenizer):
         args.dataset_config,
         split=args.dataset_split,
         streaming=True,
-        trust_remote_code=True,
     )
 
     def tokenize_function(examples):
