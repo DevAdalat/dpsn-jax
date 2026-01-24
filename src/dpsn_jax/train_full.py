@@ -11,6 +11,7 @@ import numpy as np
 import optax
 import orbax.checkpoint
 from flax.training import train_state, orbax_utils
+from flax import jax_utils  # Import jax_utils for replicate/unreplicate
 from datasets import load_dataset
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
@@ -320,7 +321,7 @@ def create_train_state(model, params, args):
     )
 
 
-@jax.jit
+@jax.pmap(axis_name="batch")  # Enable Parallelism
 def train_step(state, batch, rng):
     dropout_rng = jax.random.fold_in(rng, state.step)
 
@@ -349,14 +350,22 @@ def train_step(state, batch, rng):
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     (loss, metrics), grads = grad_fn(state.params)
+
+    # Sync gradients across devices
+    grads = jax.lax.pmean(grads, axis_name="batch")
+
     state = state.apply_gradients(grads=grads)
 
-    return state, {
+    # Aggregate metrics
+    metrics = {
         "loss": loss,
         "ce_loss": metrics[0],
         "ponder_loss": metrics[1],
         "loops": metrics[2],
     }
+    metrics = jax.lax.pmean(metrics, axis_name="batch")
+
+    return state, metrics
 
 
 def main():
@@ -420,7 +429,25 @@ def main():
         )
         logging.info(f"Auto-selected Batch Size: {args.batch_size}")
 
+    # Adjust batch size for devices
+    num_devices = jax.local_device_count()
+    if args.batch_size % num_devices != 0:
+        new_bs = (args.batch_size // num_devices) * num_devices
+        if new_bs == 0:
+            new_bs = num_devices
+        logging.warning(
+            f"Batch size {args.batch_size} not divisible by {num_devices} devices. Adjusting to {new_bs}."
+        )
+        args.batch_size = new_bs
+
+    logging.info(
+        f"Global Batch Size: {args.batch_size} ({args.batch_size // num_devices} per device)"
+    )
+
     state = create_train_state(model, params, args)
+
+    # Replicate State for PMAP
+    state = jax_utils.replicate(state)
 
     logging.info(f"Model Parameters: {config.total_params:,}")
 
@@ -438,10 +465,21 @@ def main():
         latest_step = checkpoint_manager.latest_step()
         if latest_step is not None:
             logging.info(f"Resuming from step {latest_step}...")
+            # Restore to unreplicated first
+            # We need a dummy abstract state to structure the restore
+            # Use the unreplicated one we just created
             state = checkpoint_manager.restore(latest_step, items=state)
+
+            # Replicate AFTER restore
+            state = jax_utils.replicate(state)
+
             start_step = latest_step + 1
         else:
             logging.info("No checkpoint found, starting from scratch.")
+            # Already replicated above
+    else:
+        # Already replicated
+        pass
 
     writer = SummaryWriter(log_dir=os.path.join(abs_output_dir, "tb"))
 
@@ -451,17 +489,39 @@ def main():
     logging.info(f"Starting training from step {start_step}...")
     start_time = time.time()
 
-    save_args = orbax_utils.save_args_from_target(state)
+    # We must unreplicate for saving args, but replicate for training
+    # Actually state is already replicated above.
+    # For Orbax save args, we need a single instance structure
+    unreplicated_state = jax_utils.unreplicate(state)
+    save_args = orbax_utils.save_args_from_target(unreplicated_state)
 
     avg_loss = 0.0
     steps_in_epoch = 0
 
+    # RNG keys need to be split for pmap
+    # pmap requires rngs to be [num_devices, ...]
+    # We'll just split 'key' into num_devices keys every step?
+    # Better: keep one key per device in a sharded array
+
+    # Initialize device RNGs
+    # rng_keys = jax.random.split(key, num_devices) # [num_devices, 2]
+
     for step in range(start_step, args.num_steps):
         batch = next(data_iter)
-        key, step_key = jax.random.split(key)
+
+        # Shard batch: [B, L] -> [NumDevices, B/NumDevices, L]
+        # Reshape
+        local_bs = args.batch_size // num_devices
+        batch = batch.reshape((num_devices, local_bs, -1))
+
+        # Split RNG for devices
+        key, *step_keys = jax.random.split(key, num_devices + 1)
+        step_keys = jnp.stack(step_keys)  # [num_devices, 2]
 
         step_start = time.time()
-        state, metrics = train_step(state, batch, step_key)
+        state, metrics = train_step(state, batch, step_keys)
+        # Metrics are also replicated/pmeaned, so we can just take the first one
+        metrics = jax_utils.unreplicate(metrics)
         step_time = time.time() - step_start
 
         loss_val = float(metrics["loss"])
@@ -491,6 +551,10 @@ def main():
             )
 
             try:
+                # Generation requires UNREPLICATED state
+                # We use the first device params
+                unrep_params = jax_utils.unreplicate(state.params)
+
                 prompt = "Once upon a time"
                 input_ids = tokenizer(prompt, return_tensors="np")["input_ids"]
                 input_ids = jnp.array(input_ids)
@@ -506,11 +570,13 @@ def main():
 
                 gen_text = generate(
                     model,
-                    state.params,
+                    unrep_params,
                     input_ids,
                     50,
                     tokenizer,
-                    key,
+                    jax.random.PRNGKey(
+                        42
+                    ),  # Use fixed key for deterministic sampling eval
                     eos_token_id=eos_id,
                 )
                 print(f"--- Generated Sample (Step {step}) ---")
@@ -519,12 +585,23 @@ def main():
                 writer.add_text("gen/sample", gen_text, step)
             except Exception as e:
                 logging.error(f"Generation failed: {e}")
+                import traceback
+
+                traceback.print_exc()
 
         if step > 0 and step % args.save_interval == 0:
-            checkpoint_manager.save(step, state, save_kwargs={"save_args": save_args})
+            # Unreplicate for saving
+            save_state = jax_utils.unreplicate(state)
+            checkpoint_manager.save(
+                step, save_state, save_kwargs={"save_args": save_args}
+            )
             logging.info(f"Saved checkpoint step {step}")
 
-    checkpoint_manager.save(args.num_steps, state, save_kwargs={"save_args": save_args})
+    # Unreplicate for final save
+    final_state = jax_utils.unreplicate(state)
+    checkpoint_manager.save(
+        args.num_steps, final_state, save_kwargs={"save_args": save_args}
+    )
     writer.close()
     logging.info("Training complete.")
 
