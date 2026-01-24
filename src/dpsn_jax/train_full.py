@@ -166,7 +166,7 @@ def create_data_iterator(args: TrainArgs, tokenizer):
 
 
 # --- Generation ---
-def generate(model, params, idx, max_new_tokens, tokenizer, rng):
+def generate(model, params, idx, max_new_tokens, tokenizer, rng, eos_token_id=None):
     @jax.jit
     def next_token(params, idx_cond, rng):
         outputs = model.apply(params, idx_cond, train=False)
@@ -191,6 +191,12 @@ def generate(model, params, idx, max_new_tokens, tokenizer, rng):
             idx_cond = idx[:, -max_len:]
 
         idx_next, rng = next_token(params, idx_cond, rng)
+
+        # Check for EOS
+        token_id = int(idx_next[0])
+        if eos_token_id is not None and token_id == eos_token_id:
+            break
+
         idx_next = idx_next[None]
         idx = jnp.concatenate([idx, idx_next], axis=1)
 
@@ -381,7 +387,24 @@ def main():
                 input_ids = tokenizer(prompt, return_tensors="np")["input_ids"]
                 input_ids = jnp.array(input_ids)
 
-                gen_text = generate(model, state.params, input_ids, 50, tokenizer, key)
+                # Determine EOS ID
+                eos_id = tokenizer.eos_token_id
+                if args.eos_token:
+                    # If user specified a string, try to get its ID
+                    # We assume args.eos_token matches a token in the vocab
+                    custom_eos = tokenizer.convert_tokens_to_ids(args.eos_token)
+                    if custom_eos != tokenizer.unk_token_id:
+                        eos_id = custom_eos
+
+                gen_text = generate(
+                    model,
+                    state.params,
+                    input_ids,
+                    50,
+                    tokenizer,
+                    key,
+                    eos_token_id=eos_id,
+                )
                 print(f"--- Generated Sample (Step {step}) ---")
                 print(gen_text)
                 print("-------------------------------------")
