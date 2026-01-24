@@ -395,6 +395,14 @@ def main():
         format="%(asctime)s - %(levelname)s - %(message)s",
         force=True,
     )
+    # Log JAX Devices
+    try:
+        devices = jax.devices()
+        print(f"JAX Devices: {devices}")
+        logging.info(f"JAX Devices: {devices}")
+    except Exception as e:
+        print(f"Error checking devices: {e}")
+
     args = parse_args()
     print(f"Configuration parsed: {args.model_preset}")
     logging.info(f"Configuration: {args}")
