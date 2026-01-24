@@ -266,7 +266,12 @@ class HaltPredictor(nn.Module):
             self.hidden_dim // 4, kernel_init=nn.initializers.normal(stddev=0.02)
         )(hidden)
         x = nn.gelu(x)
-        x = nn.Dense(1, kernel_init=nn.initializers.normal(stddev=0.02))(x)
+        # Initialize bias to -2.0 to encourage initial looping (prob ~0.12)
+        x = nn.Dense(
+            1,
+            kernel_init=nn.initializers.normal(stddev=0.02),
+            bias_init=nn.initializers.constant(-2.0),
+        )(x)
         return nn.sigmoid(x)  # [B, T, 1]
 
 

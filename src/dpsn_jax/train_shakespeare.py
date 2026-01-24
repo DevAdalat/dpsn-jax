@@ -134,7 +134,7 @@ def main():
     config = DPSNRConfig.nano()
     config.vocab_size = dataset.vocab_size
     config.max_seq_len = 64
-    config.max_loops = 4
+    config.max_loops = 8
     config.dropout_rate = 0.1
 
     print(f"Initializing model (Params: {config.total_params})...")
