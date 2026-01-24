@@ -373,6 +373,18 @@ def main():
     config.max_seq_len = args.max_seq_len
     config.max_loops = args.max_loops
 
+    # Pad vocab size for sharding
+    # We need it divisible by num_devices (e.g. 8)
+    real_vocab_size = tokenizer.vocab_size
+    if real_vocab_size % num_devices != 0:
+        padded_vocab = ((real_vocab_size // num_devices) + 1) * num_devices
+        logging.info(
+            f"Padding vocab size from {real_vocab_size} to {padded_vocab} for sharding divisibility."
+        )
+        config.vocab_size = padded_vocab
+    else:
+        config.vocab_size = real_vocab_size
+
     # 4. Initialize Model (Abstract)
     logging.info("Initializing model...")
     model = DPSNR(config)
@@ -405,12 +417,23 @@ def main():
 
     # Define Sharding Rule
     def get_fsdp_sharding(x):
-        # Shard first dimension if it is divisible by mesh size?
-        # Or just allow uneven sharding?
-        # FSDP usually shards dim 0.
-        if x.ndim >= 1:
+        # Shard first dimension if it is divisible by mesh size
+        if x.ndim >= 1 and x.shape[0] % num_devices == 0:
             return NamedSharding(mesh, P("fsdp"))
-        return NamedSharding(mesh, P())  # Replicated scalars
+        # If axis 0 not divisible (unlikely with our padding), fall back to replication?
+        # Or try axis 1?
+        # For embeddings [Vocab, Hidden], we padded Vocab so axis 0 works.
+        # For Dense Kernels [In, Out], usually In is HiddenDim (divisible by 8 usually).
+        # For Biases [Out], usually HiddenDim.
+
+        # Check standard hidden dims:
+        # 64, 128, 256, 512, 768, 1024 ... all divisible by 8.
+        # What if not?
+        if x.ndim >= 2 and x.shape[1] % num_devices == 0:
+            return NamedSharding(mesh, P(None, "fsdp"))
+
+        # Fallback to replication
+        return NamedSharding(mesh, P())
 
     # Create PyTree of shardings
     param_shardings = jax.tree_util.tree_map(get_fsdp_sharding, abstract_params)
