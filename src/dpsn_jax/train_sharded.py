@@ -520,8 +520,10 @@ def main():
         targets = batch[:, 1:]
 
         def loss_fn(params):
+            # Re-wrap params for Flax apply
+            variables = {"params": params}
             outputs = state.apply_fn(
-                params, inputs, train=True, rngs={"dropout": dropout_rng}
+                variables, inputs, train=True, rngs={"dropout": dropout_rng}
             )
             logits = outputs["logits"]
             ce_loss = optax.softmax_cross_entropy_with_integer_labels(
@@ -628,9 +630,12 @@ def main():
                     # Input (1, Len). Sharding P('fsdp') means splitting batch 1? No.
                     # Input should be P(None) (Replicated).
 
+                    # Re-wrap params for generation
+                    gen_variables = {"params": state.params}
+
                     gen_text = generate(
                         model,
-                        state.params,  # Sharded
+                        gen_variables,  # Pass wrapped variables
                         input_ids,
                         50,
                         tokenizer,
