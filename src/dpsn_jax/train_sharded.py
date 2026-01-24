@@ -534,15 +534,16 @@ def main():
             return loss, (ce_loss, ponder_loss, outputs["loops"])
 
         grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-        (loss, metrics), grads = grad_fn(state.params)
-
-        # In FSDP (Sharding), we don't need manual pmean usually if using pjit with correct PartitionSpec?
-        # WAIT: 'grads' produced by value_and_grad on sharded params will be sharded.
-        # But are they fully reduced?
-        # With jax.jit and sharded inputs/weights, JAX automatically inserts collectives (all-reduce/reduce-scatter).
-        # We generally DO NOT need explicit pmean inside jit-ted function when using sharding API.
+        (loss, aux_metrics), grads = grad_fn(state.params)
 
         state = state.apply_gradients(grads=grads)
+
+        metrics = {
+            "loss": loss,
+            "ce_loss": aux_metrics[0],
+            "ponder_loss": aux_metrics[1],
+            "loops": aux_metrics[2],
+        }
         return state, metrics
 
     # 7. Training Loop
