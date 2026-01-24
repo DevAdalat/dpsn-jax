@@ -13,9 +13,105 @@ import orbax.checkpoint
 from flax.training import train_state, orbax_utils
 from datasets import load_dataset
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
-from torch.utils.tensorboard import SummaryWriter
+
+try:
+    from torch.utils.tensorboard.writer import SummaryWriter
+except ImportError:
+    from torch.utils.tensorboard import SummaryWriter
+
+import subprocess
+import shutil
 
 from dpsn_jax.dpsn_flax import DPSNR, DPSNRConfig
+
+
+# --- Utils ---
+def get_available_memory_mb():
+    """Detects available device memory in MB."""
+    platform = jax.local_devices()[0].platform
+
+    if platform == "gpu":
+        # Try nvidia-smi
+        if shutil.which("nvidia-smi"):
+            try:
+                result = subprocess.run(
+                    [
+                        "nvidia-smi",
+                        "--query-gpu=memory.free",
+                        "--format=csv,nounits,noheader",
+                    ],
+                    encoding="utf-8",
+                    stdout=subprocess.PIPE,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    # Return memory of first GPU
+                    return int(result.stdout.strip().split("\n")[0])
+            except Exception:
+                pass
+        # Fallback for GPU if nvidia-smi fails (safe default 8GB)
+        return 8192
+
+    elif platform == "tpu":
+        # TPU memory detection is complex from Python.
+        # TPU v2: 8GB, v3: 16GB, v4: 32GB
+        # We'll assume a conservative default (TPU v3)
+        return 16384
+
+    else:
+        # CPU
+        return 4096
+
+
+def calculate_auto_batch_size(config, total_params, available_mem_mb):
+    """
+    Heuristic to calculate max batch size.
+
+    Memory usage components:
+    1. Static Model: Params + Grads + Optimizer
+       - Bytes ≈ Params * (4 + 4 + 8) = Params * 16
+    2. Activations (Dynamic):
+       - Dependent on Batch, SeqLen, Hidden, Layers
+       - Heuristic: BS * Seq * Hidden * Layers * 12 bytes
+    """
+    # 1. Static Memory
+    # Convert params to MB (1 MB = 1e6 bytes approx for simple math)
+    static_mem_bytes = (
+        total_params * 18
+    )  # 4 (param) + 4 (grad) + 8 (adam) + 2 (overhead)
+    static_mem_mb = static_mem_bytes / (1024 * 1024)
+
+    # 2. Available for Activations (Leave 10% buffer)
+    usable_mem_mb = (available_mem_mb * 0.9) - static_mem_mb
+
+    if usable_mem_mb <= 0:
+        logging.warning("Model is too large for detected memory! Defaulting to BS=1")
+        return 1
+
+    # 3. Activation Cost per Sample (Heuristic)
+    # Factor 12: 4 bytes * 3 (Forward + Backward intermediates)
+    # Factor 2: Extra buffer for attention matrix, etc.
+    activation_bytes_per_sample = (
+        config.max_seq_len * config.hidden_dim * config.num_layers * 24
+    )
+    # Add MassivePool overhead (Seq * PoolDim * MaxK * 4)
+    activation_bytes_per_sample += (
+        config.max_seq_len * config.pool_dim * config.max_k * 4 * 10
+    )
+
+    act_mem_mb_per_sample = activation_bytes_per_sample / (1024 * 1024)
+
+    optimal_bs = int(usable_mem_mb / act_mem_mb_per_sample)
+
+    # Clamp
+    optimal_bs = max(1, min(optimal_bs, 512))  # Cap at 512 to avoid Dim0 limit issues
+
+    # Round down to nearest power of 2 for efficiency (optional but good for TPU)
+    # Power of 2 logic: 2^floor(log2(n))
+    if optimal_bs > 1:
+        optimal_bs = 2 ** int(np.log2(optimal_bs))
+
+    return optimal_bs
 
 
 # --- Configuration ---
@@ -312,6 +408,18 @@ def main():
 
     dummy_input = jnp.zeros((1, args.max_seq_len), dtype=jnp.int32)
     params = model.init(init_key, dummy_input)
+
+    # --- Auto Batch Size Logic ---
+    if args.batch_size <= 0:
+        logging.info("Auto-tuning batch size...")
+        avail_mem = get_available_memory_mb()
+        logging.info(f"Detected Available Memory: {avail_mem} MB")
+
+        args.batch_size = calculate_auto_batch_size(
+            config, config.total_params, avail_mem
+        )
+        logging.info(f"Auto-selected Batch Size: {args.batch_size}")
+
     state = create_train_state(model, params, args)
 
     logging.info(f"Model Parameters: {config.total_params:,}")
