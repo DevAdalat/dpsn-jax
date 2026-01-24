@@ -23,6 +23,7 @@ from dpsn_jax.dpsn_flax import DPSNR, DPSNRConfig
 class TrainArgs:
     # Model Config
     model_preset: str = "nano"
+    max_loops: int = 8
 
     # Data Config
     dataset_name: str = "wikitext"
@@ -74,6 +75,9 @@ def parse_args() -> TrainArgs:
     )
     parser.add_argument(
         "--num_steps", type=int, default=1000, help="Number of training steps"
+    )
+    parser.add_argument(
+        "--max_loops", type=int, default=8, help="Maximum number of reasoning loops"
     )
     parser.add_argument(
         "--eval_interval", type=int, default=100, help="Evaluation interval"
@@ -283,6 +287,7 @@ def main():
     # Override vocab size
     config.vocab_size = tokenizer.vocab_size
     config.max_seq_len = args.max_seq_len
+    config.max_loops = args.max_loops
 
     # 3. Initialize Model
     logging.info("Initializing model...")
