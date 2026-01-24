@@ -31,6 +31,7 @@ class TrainArgs:
     dataset_split: str = "train"
     text_column: str = "text"
     tokenizer_name: str = "gpt2"
+    eos_token: Optional[str] = None
     max_seq_len: int = 128
 
     # Training Config
@@ -65,6 +66,12 @@ def parse_args() -> TrainArgs:
     )
     parser.add_argument(
         "--tokenizer_name", type=str, default="gpt2", help="HF Tokenizer name"
+    )
+    parser.add_argument(
+        "--eos_token",
+        type=str,
+        default=None,
+        help="Custom EOS token to append (e.g. <|endoftext|>)",
     )
     parser.add_argument(
         "--max_seq_len", type=int, default=128, help="Max sequence length"
@@ -134,6 +141,8 @@ def create_data_iterator(args: TrainArgs, tokenizer):
                 item = next(iterator)
                 text = item[args.text_column]
                 if len(text.strip()) > 0:
+                    if args.eos_token:
+                        text = text + args.eos_token
                     batch_texts.append(text)
             except StopIteration:
                 iterator = iter(dataset)
