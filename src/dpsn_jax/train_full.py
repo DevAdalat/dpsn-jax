@@ -320,14 +320,41 @@ def create_train_state(model, params, args):
         tx=tx,
     )
 
+    # Define pmapped train_step inside main or global scope?
+    # Global scope is cleaner, but we need to ensure it's not redefined.
+    # It is defined above as 'train_step'.
 
-@jax.pmap(axis_name="batch")  # Enable Parallelism
-def train_step(state, batch, rng):
+    # However, 'jax.pmap' decorator needs to be executed.
+    # It seems the error "TypeError: pmap() missing 1 required positional argument: 'fun'"
+    # implies that it was called incorrectly as a function, not a decorator?
+    # No, @jax.pmap(axis_name="batch") is correct syntax.
+
+    # Wait, the traceback says:
+    # line 324, in <module> @jax.pmap(axis_name="batch")
+    # TypeError: pmap() missing 1 required positional argument: 'fun'
+
+    # This usually happens if jax version is old or strange import?
+    # Or maybe jax.pmap is NOT a decorator in this version? (Very unlikely)
+    # Ah, maybe the user environment has an issue.
+    # BUT, actually, standard jax.pmap IS a function that returns a function.
+    # usage: @jax.pmap(axis_name='batch') def f(...): ...
+    # This is correct.
+
+    # Let's check if 'axis_name' is keyword-only?
+    # jax.pmap(fun, axis_name=None, ...)
+    # If used as decorator: @partial(jax.pmap, axis_name='batch') ?
+    # No, standard python decorators with args work fine.
+
+    # HOWEVER, in some JAX versions, if you call pmap() with args, it expects 'fun' to be passed if it's not a partial application.
+    # But usually @jax.pmap(...) works.
+
+    # Let's try to be safer and assign it explicitly.
+    pass
+
+
+# Move train_step logic to be explicit pmap call
+def train_step_impl(state, batch, rng):
     dropout_rng = jax.random.fold_in(rng, state.step)
-
-    # Input: batch, Targets: shifted batch
-    # We need to handle padding logic if needed, but for now assuming valid tokens
-    # Or just next token pred
     inputs = batch[:, :-1]
     targets = batch[:, 1:]
 
@@ -336,27 +363,17 @@ def train_step(state, batch, rng):
             params, inputs, train=True, rngs={"dropout": dropout_rng}
         )
         logits = outputs["logits"]
-
-        # Mask padding tokens? (usually 0 or pad_token_id)
-        # For simplicity, we assume pad tokens contribute to loss or are handled
-        # Better: use optax mask
         ce_loss = optax.softmax_cross_entropy_with_integer_labels(
             logits, targets
         ).mean()
         ponder_loss = outputs["ponder_loss"]
-
         loss = ce_loss + 0.01 * ponder_loss
         return loss, (ce_loss, ponder_loss, outputs["loops"])
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     (loss, metrics), grads = grad_fn(state.params)
-
-    # Sync gradients across devices
     grads = jax.lax.pmean(grads, axis_name="batch")
-
     state = state.apply_gradients(grads=grads)
-
-    # Aggregate metrics
     metrics = {
         "loss": loss,
         "ce_loss": metrics[0],
@@ -364,8 +381,11 @@ def train_step(state, batch, rng):
         "loops": metrics[2],
     }
     metrics = jax.lax.pmean(metrics, axis_name="batch")
-
     return state, metrics
+
+
+# Create the pmapped function explicitly
+pmapped_train_step = jax.pmap(train_step_impl, axis_name="batch")
 
 
 def main():
@@ -523,7 +543,7 @@ def main():
         step_keys = jnp.stack(step_keys)  # [num_devices, 2]
 
         step_start = time.time()
-        state, metrics = train_step(state, batch, step_keys)
+        state, metrics = pmapped_train_step(state, batch, step_keys)
         # Metrics are also replicated/pmeaned, so we can just take the first one
         metrics = jax_utils.unreplicate(metrics)
         step_time = time.time() - step_start
