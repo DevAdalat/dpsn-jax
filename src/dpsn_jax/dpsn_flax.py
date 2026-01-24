@@ -200,22 +200,31 @@ class TransformerBlock(nn.Module):
     config: DPSNRConfig
 
     def setup(self):
-        self.layernorm1 = nn.LayerNorm()
+        self.layernorm1 = nn.LayerNorm(epsilon=1e-5)
         self.self_attn = nn.SelfAttention(
             num_heads=self.config.num_heads,
             decode=False,
+            kernel_init=nn.initializers.normal(stddev=0.02),
+            use_bias=False,
         )
         self.dropout1 = nn.Dropout(rate=self.config.dropout_rate)
-        self.layernorm2 = nn.LayerNorm()
+        self.layernorm2 = nn.LayerNorm(epsilon=1e-5)
         self.dense1 = nn.Dense(
-            int(self.config.hidden_dim * self.config.controller_ff_multiplier)
+            int(self.config.hidden_dim * self.config.controller_ff_multiplier),
+            kernel_init=nn.initializers.normal(stddev=0.02),
         )
-        self.dense2 = nn.Dense(self.config.hidden_dim)
+        self.dropout_ffn = nn.Dropout(rate=self.config.dropout_rate)
+        self.dense2 = nn.Dense(
+            self.config.hidden_dim,
+            kernel_init=nn.initializers.normal(stddev=0.02),
+        )
         self.dropout2 = nn.Dropout(rate=self.config.dropout_rate)
 
     def __call__(self, x, train: bool = False):
         batch, seq, _ = x.shape
+        # Explicit boolean mask for safety
         mask = nn.make_causal_mask(jnp.ones((batch, seq), dtype=jnp.int32))
+        mask = mask > 0
 
         y = self.layernorm1(x)
         y = self.self_attn(y, mask=mask)
@@ -225,6 +234,7 @@ class TransformerBlock(nn.Module):
         y = self.layernorm2(x)
         y = self.dense1(y)
         y = nn.gelu(y)
+        y = self.dropout_ffn(y, deterministic=not train)
         y = self.dense2(y)
         y = self.dropout2(y, deterministic=not train)
         x = x + y
@@ -252,9 +262,11 @@ class HaltPredictor(nn.Module):
     @nn.compact
     def __call__(self, hidden):
         # hidden: [B, T, D]
-        x = nn.Dense(self.hidden_dim // 4)(hidden)
+        x = nn.Dense(
+            self.hidden_dim // 4, kernel_init=nn.initializers.normal(stddev=0.02)
+        )(hidden)
         x = nn.gelu(x)
-        x = nn.Dense(1)(x)
+        x = nn.Dense(1, kernel_init=nn.initializers.normal(stddev=0.02))(x)
         return nn.sigmoid(x)  # [B, T, 1]
 
 
@@ -267,9 +279,13 @@ class PhaseClassifier(nn.Module):
         # Pool over sequence for global phase (as per original design)
         pooled = hidden.mean(axis=1)  # [B, D]
 
-        x = nn.Dense(self.hidden_dim // 4)(pooled)
+        x = nn.Dense(
+            self.hidden_dim // 4, kernel_init=nn.initializers.normal(stddev=0.02)
+        )(pooled)
         x = nn.gelu(x)
-        logits = nn.Dense(3)(x)  # [B, 3] (3 phases)
+        logits = nn.Dense(3, kernel_init=nn.initializers.normal(stddev=0.02))(
+            x
+        )  # [B, 3] (3 phases)
 
         # Determine global phase (Mode of batch)
         # JAX doesn't have mode(), so we estimate or just take mean logits
@@ -287,13 +303,17 @@ class StateAccumulator(nn.Module):
     def __call__(self, current, accumulated):
         # Gated update
         combined = jnp.concatenate([current, accumulated], axis=-1)
-        gate = nn.Dense(self.hidden_dim)(combined)
+        gate = nn.Dense(
+            self.hidden_dim, kernel_init=nn.initializers.normal(stddev=0.02)
+        )(combined)
         gate = nn.sigmoid(gate)
 
-        transformed = nn.Dense(self.hidden_dim)(current)
+        transformed = nn.Dense(
+            self.hidden_dim, kernel_init=nn.initializers.normal(stddev=0.02)
+        )(current)
 
         new_accumulated = gate * transformed + (1.0 - gate) * accumulated
-        return nn.LayerNorm()(new_accumulated)
+        return nn.LayerNorm(epsilon=1e-5)(new_accumulated)
 
 
 class LoopEmbedding(nn.Module):
@@ -301,7 +321,11 @@ class LoopEmbedding(nn.Module):
     max_loops: int
 
     def setup(self):
-        self.embedding = nn.Embed(self.max_loops, self.hidden_dim)
+        self.embedding = nn.Embed(
+            self.max_loops,
+            self.hidden_dim,
+            embedding_init=nn.initializers.normal(stddev=0.02),
+        )
         # Fixed Sinusoidal PE
         position = jnp.arange(0, self.max_loops, dtype=jnp.float32)[:, None]
         div_term = jnp.exp(
@@ -388,7 +412,11 @@ class DPSNR(nn.Module):
     config: DPSNRConfig
 
     def setup(self):
-        self.embedding = nn.Embed(self.config.vocab_size, self.config.hidden_dim)
+        self.embedding = nn.Embed(
+            self.config.vocab_size,
+            self.config.hidden_dim,
+            embedding_init=nn.initializers.normal(stddev=0.02),
+        )
         self.pos_embedding = self.param(
             "pos_embedding",
             nn.initializers.normal(stddev=0.02),
@@ -410,13 +438,22 @@ class DPSNR(nn.Module):
 
         self.integrator = nn.Sequential(
             [
-                nn.Dense(self.config.hidden_dim * 2),
+                nn.Dense(
+                    self.config.hidden_dim * 2,
+                    kernel_init=nn.initializers.normal(stddev=0.02),
+                ),
                 nn.gelu,
-                nn.Dense(self.config.hidden_dim),
+                nn.Dense(
+                    self.config.hidden_dim,
+                    kernel_init=nn.initializers.normal(stddev=0.02),
+                ),
+                nn.LayerNorm(epsilon=1e-5),
             ]
         )
-        self.k_predictor = nn.Dense(1)
-        self.lm_head = nn.Dense(self.config.vocab_size)
+        self.k_predictor = nn.Dense(1, kernel_init=nn.initializers.normal(stddev=0.02))
+        self.lm_head = nn.Dense(
+            self.config.vocab_size, kernel_init=nn.initializers.normal(stddev=0.02)
+        )
 
         self.dropout = nn.Dropout(rate=self.config.dropout_rate)
 
@@ -430,28 +467,43 @@ class DPSNR(nn.Module):
         # Unpack state
         state = carry
 
-        # 1. Loop Embedding
-        loop_emb = self.loop_embedding(state.loop_count)
-        hidden_input = state.hidden + loop_emb[None, None, :]
+        # 1. Retrieval (Use current hidden state)
+        k_val = self.get_retrieval_k(state.hidden)
+        # We need phase_idx for pool?
+        # PyTorch uses "pooled = hidden.mean(dim=1)" for complexity/router
+        # JAX MassivePool takes phase_idx.
+        # PyTorch "HierarchicalMassivePool" does NOT take phase_idx in retrieve()!
+        # It uses self.router(hidden).
+        # But JAX MassivePool signature: (query_hidden, k_predicted, phase_idx)
+        # Let's keep phase_idx for now but compute it from state.hidden
 
-        # 2. Controller
-        processed = self.controller(hidden_input, train)
+        # We need phase classifier output for phase_idx
+        phase_logits, phase_idx = self.phase_classifier(state.hidden)
 
-        # 3. Phase Classification
-        phase_logits, phase_idx = self.phase_classifier(processed)
+        retrieved = self.pool(state.hidden, k_val, phase_idx)
 
-        # 4. Retrieval
-        k_val = self.get_retrieval_k(processed)
-        retrieved = self.pool(processed, k_val, phase_idx)
-
-        # 5. Integration
+        # 2. Integration
         context = jnp.sum(retrieved, axis=2) / (k_val + 1e-6)
-        integrated = self.integrator(jnp.concatenate([processed, context], axis=-1))
+        # PyTorch: combined = torch.cat([state.hidden, retrieved_expanded], dim=-1)
+        # JAX Pool returns [Batch, Seq, K, Dim]. sum(axis=2) -> [Batch, Seq, Dim]
+        # So context is comparable to retrieved mean?
+        # PyTorch retrieve returns "aggregated" which is weighted sum.
+        # JAX MassivePool returns "retrieved" vectors.
+        # We need to mean them manually? Yes, JAX code does sum / k.
 
-        # 6. Accumulate State
-        new_hidden = self.state_accumulator(integrated, state.hidden)
+        integrated = self.integrator(jnp.concatenate([state.hidden, context], axis=-1))
 
-        # 7. Halt Prediction (ACT)
+        # 3. Residual Connection (Match PyTorch: state.hidden + integrated)
+        step_input = state.hidden + integrated
+
+        # 4. Loop Embedding (Match PyTorch: added inside step)
+        loop_emb = self.loop_embedding(state.loop_count)
+        hidden_input = step_input + loop_emb[None, None, :]
+
+        # 5. Accumulate State
+        new_hidden = self.state_accumulator(hidden_input, state.hidden)
+
+        # 6. Halt Prediction (ACT)
         halt_prob = self.halt_predictor(new_hidden)  # [B, T, 1]
 
         # ACT Logic
@@ -478,7 +530,7 @@ class DPSNR(nn.Module):
         # But for ponder cost, we track the prob sum.
         final_cumulative = jnp.minimum(new_cumulative, 1.0)
 
-        # 8. Gated State Update
+        # 7. Gated State Update
         # If just halted or already halted, we keep the state that triggered the halt
         # Actually, ACT standard: we usually output the state *at* the halt step.
         # So we update everyone, but we'll mask the final output of the loop later.
@@ -505,6 +557,9 @@ class DPSNR(nn.Module):
 
         pos_emb = self.pos_embedding[:, :seq, :]
         x = x + pos_emb
+
+        # Apply Controller Layers HERE (Outside Loop)
+        x = self.controller(x, train=train)
 
         x = self.dropout(x, deterministic=not train)
 
