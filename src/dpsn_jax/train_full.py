@@ -428,6 +428,7 @@ def main():
             config, config.total_params, avail_mem
         )
         logging.info(f"Auto-selected Batch Size: {args.batch_size}")
+        print(f"Auto-selected Batch Size: {args.batch_size}")
 
     # Adjust batch size for devices
     num_devices = jax.local_device_count()
@@ -441,6 +442,9 @@ def main():
         args.batch_size = new_bs
 
     logging.info(
+        f"Global Batch Size: {args.batch_size} ({args.batch_size // num_devices} per device)"
+    )
+    print(
         f"Global Batch Size: {args.batch_size} ({args.batch_size // num_devices} per device)"
     )
 
