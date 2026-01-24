@@ -417,14 +417,13 @@ def main():
 
     # Define Sharding Rule
     def get_fsdp_sharding(x):
+        # Handle non-array types (int, float, None)
+        if not hasattr(x, "ndim"):
+            return NamedSharding(mesh, P())
+
         # Shard first dimension if it is divisible by mesh size
         if x.ndim >= 1 and x.shape[0] % num_devices == 0:
             return NamedSharding(mesh, P("fsdp"))
-        # If axis 0 not divisible (unlikely with our padding), fall back to replication?
-        # Or try axis 1?
-        # For embeddings [Vocab, Hidden], we padded Vocab so axis 0 works.
-        # For Dense Kernels [In, Out], usually In is HiddenDim (divisible by 8 usually).
-        # For Biases [Out], usually HiddenDim.
 
         # Check standard hidden dims:
         # 64, 128, 256, 512, 768, 1024 ... all divisible by 8.
